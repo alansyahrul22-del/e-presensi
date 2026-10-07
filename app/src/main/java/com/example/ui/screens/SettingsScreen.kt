@@ -136,14 +136,14 @@ fun SettingsScreen(viewModel: PresensiViewModel) {
                         OutlinedButton(
                             onClick = {
                                 viewModel.loadBoot()
-                                viewModel.showToast("Sinkronisasi data Google Sheet selesai")
+                                viewModel.syncTeachersFromRemote()
                             },
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Tes Koneksi")
+                            Text("Sinkron Sheet")
                         }
                     }
                 }

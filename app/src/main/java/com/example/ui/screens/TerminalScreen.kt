@@ -35,6 +35,7 @@ fun TerminalScreen(viewModel: PresensiViewModel) {
     val scanResult by viewModel.scanResult.collectAsState()
     val isProcessing by viewModel.isProcessingScan.collectAsState()
     val terminal by viewModel.selectedTerminal.collectAsState()
+    val currentUser by viewModel.currentUser.collectAsState()
 
     var inputBarcode by remember { mutableStateOf("") }
 
@@ -71,7 +72,7 @@ fun TerminalScreen(viewModel: PresensiViewModel) {
                     modifier = Modifier.padding(bottom = 8.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -82,17 +83,19 @@ fun TerminalScreen(viewModel: PresensiViewModel) {
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "TERMINAL DIGITAL PRESENSI",
+                            text = "TERMINAL DIGITAL SCANNER",
                             color = GreenDark,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
+                            fontSize = 12.sp,
+                            letterSpacing = 0.5.sp
                         )
                     }
                 }
 
+                // Ganti judul utama sesuai permintaan user
                 Text(
-                    text = boot.nama,
-                    fontSize = 20.sp,
+                    text = "Presensi Guru MMU Idadiyah",
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = GreenDark,
                     textAlign = TextAlign.Center
@@ -100,7 +103,7 @@ fun TerminalScreen(viewModel: PresensiViewModel) {
 
                 Text(
                     text = clock.hijri.text.uppercase(),
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = SlateMuted,
                     modifier = Modifier.padding(top = 4.dp)
@@ -247,23 +250,37 @@ fun TerminalScreen(viewModel: PresensiViewModel) {
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = SlateBorder)
+                Spacer(modifier = Modifier.height(10.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Lokasi Terminal: $terminal",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SlateMuted
-                    )
-                    TextButton(onClick = {
-                        val next = if (terminal == "T01") "T02" else if (terminal == "T02") "T03" else "T01"
-                        viewModel.setTerminal(next)
-                    }) {
-                        Text("Ganti ($terminal)", fontSize = 12.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            color = GreenContainer,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = "TERHUBUNG: $terminal",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = GreenDark,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    TextButton(
+                        onClick = { viewModel.logout() },
+                        colors = ButtonDefaults.textButtonColors(contentColor = RedDanger)
+                    ) {
+                        Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Keluar", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }

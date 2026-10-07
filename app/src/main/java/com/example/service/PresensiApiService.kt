@@ -1,28 +1,34 @@
 package com.example.service
 
+import android.content.Context
 import com.example.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
+import java.net.URLEncoder
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Service for Attendance System.
- * Connects directly to the user's Google Apps Script web app endpoint,
- * with full fallback and standalone offline capability matching the exact logic in Code.gs!
+ * Service for Attendance System MMU Idadiyah.
+ * Supports:
+ * 1. Synchronizing teachers from DATA_GURU sheet (or CSV/JSON/Apps Script remote).
+ * 2. Saving attendance rows to PRESENSI sheet structure and locally persisting them.
+ * 3. Importing & adding teachers directly into the system.
  */
 class PresensiApiService(
+    private val context: Context? = null,
     private var endpointUrl: String = "https://script.google.com/macros/s/AKfycbyayQpHOQWO-7Waa3QXAsmwpHlb-3bcZpQ9Cfj_-V1dmZqwX5CdudYPu5AS-ASpX7cn/exec"
 ) {
+    private val localStore = context?.let { PresensiLocalStore(it) }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -30,7 +36,7 @@ class PresensiApiService(
         .followSslRedirects(true)
         .build()
 
-    // Standalone / Offline In-Memory Database matching Code.gs
+    // Standalone / Offline in-memory teachers matching sheet DATA_GURU
     private val defaultTeachers = mutableListOf(
         Teacher("14371025", "H. Ahmad Fauzi, S.Pd.I", "VII A", "VIII A", "Gedung Pusat", "01"),
         Teacher("14371026", "Hj. Siti Mariam, M.Pd", "VII B", "VIII B", "Gedung Pusat", "02"),
@@ -39,7 +45,11 @@ class PresensiApiService(
         Teacher("14371029", "Drs. H. Miftahul Ulum", "IX A", "VII A", "Gedung Pusat", "05"),
         Teacher("14371030", "Abdul Halim, S.Kom", "IX B", "VII B", "Lab Komputer", "06"),
         Teacher("14371031", "K.H. Sholehuddin, M.Ag", "Tahfidz A", "Tahfidz B", "Masjid Kampus", "07"),
-        Teacher("14371032", "Ustd. Fatimatuz Zahro, S.Pd", "VII C", "VIII C", "Gedung Putri", "08")
+        Teacher("14371032", "Ustd. Fatimatuz Zahro, S.Pd", "VII C", "VIII C", "Gedung Putri", "08"),
+        Teacher("14371033", "Ust. Ahmad Dahlan, S.Pd", "VIII C", "IX C", "Gedung Timur", "09"),
+        Teacher("14371034", "Ustazah Lailatul Badriyah, S.Ag", "VII A", "VII B", "Gedung Putri", "10"),
+        Teacher("14371035", "M. Hasan Basri, M.H.I", "IX C", "IX A", "Gedung Pusat", "11"),
+        Teacher("14371036", "Ust. Zainal Abidin, S.Pd.I", "Tahfidz B", "Tahfidz A", "Masjid Kampus", "12")
     )
 
     private val attendanceHistory = mutableListOf<AttendanceRecord>()
@@ -47,8 +57,8 @@ class PresensiApiService(
     private val logs = mutableListOf<ActivityLog>()
 
     private var settings = mutableMapOf(
-        "NAMA SEKOLAH" to "MADRASAH & PONDOK PESANTREN",
-        "ALAMAT" to "Jl. Pesantren Luhur No. 01, Jawa Timur",
+        "NAMA SEKOLAH" to "Presensi Guru MMU Idadiyah",
+        "ALAMAT" to "Madrasah Miftahul Ulum (MMU) Idadiyah",
         "TIMEZONE" to "Asia/Jakarta",
         "JAM MASUK" to "07:30",
         "TOLERANSI" to "10",
@@ -60,35 +70,108 @@ class PresensiApiService(
     )
 
     init {
-        // Pre-populate some realistic initial attendances for demo
-        val clock = calculateIstiwakClock()
-        attendanceHistory.add(
-            AttendanceRecord("07:15", "H. Ahmad Fauzi, S.Pd.I", "Gedung Pusat", "HADIR", "T01", "14371025", "Scan tepat waktu", 0)
-        )
-        attendanceHistory.add(
-            AttendanceRecord("07:25", "Hj. Siti Mariam, M.Pd", "Gedung Pusat", "HADIR", "T01", "14371026", "Scan tepat waktu", 0)
-        )
-        attendanceHistory.add(
-            AttendanceRecord("07:42", "Ust. Muhammad Ridwan, Lc", "Gedung Timur", "TERLAMBAT", "T02", "14371027", "Terlambat 12 menit", 12)
-        )
-        leaveList.add(
-            LeaveItem(clock.tgl, "14371028", "Ustazah Nur Aini, S.Si", "IZIN", "Keperluan dinas luar kota")
-        )
-        logs.add(
-            ActivityLog(clock.tgl + " 07:00:00", "tu", "ADMIN", "SETUP", "", "", "", "Inisialisasi sistem presensi")
-        )
+        // Restore cached endpoint URL
+        localStore?.let { store ->
+            endpointUrl = store.loadEndpointUrl(endpointUrl)
+            val savedTeachers = store.loadTeachers()
+            if (!savedTeachers.isNullOrEmpty()) {
+                defaultTeachers.clear()
+                defaultTeachers.addAll(savedTeachers)
+            }
+            val savedAttendance = store.loadAttendanceHistory()
+            if (!savedAttendance.isNullOrEmpty()) {
+                attendanceHistory.clear()
+                attendanceHistory.addAll(savedAttendance)
+            }
+        }
+
+        // Pre-populate some realistic initial attendances if empty
+        if (attendanceHistory.isEmpty()) {
+            val clock = calculateIstiwakClock()
+            attendanceHistory.add(
+                AttendanceRecord(
+                    id = "PRS001",
+                    timestamp = "${clock.tgl} 07:15:00",
+                    tglMasehi = clock.tgl,
+                    hari = clock.hari,
+                    tglHijriah = clock.hijri.text,
+                    jam = "07:15",
+                    nama = "H. Ahmad Fauzi, S.Pd.I",
+                    tempat = "Gedung Pusat",
+                    status = "HADIR",
+                    terminal = "T01",
+                    pps = "14371025",
+                    kelasAsal = "VII A",
+                    kelasBaru = "VIII A",
+                    no = "01",
+                    ket = "Scan tepat waktu",
+                    menit = 0
+                )
+            )
+            attendanceHistory.add(
+                AttendanceRecord(
+                    id = "PRS002",
+                    timestamp = "${clock.tgl} 07:25:00",
+                    tglMasehi = clock.tgl,
+                    hari = clock.hari,
+                    tglHijriah = clock.hijri.text,
+                    jam = "07:25",
+                    nama = "Hj. Siti Mariam, M.Pd",
+                    tempat = "Gedung Pusat",
+                    status = "HADIR",
+                    terminal = "T01",
+                    pps = "14371026",
+                    kelasAsal = "VII B",
+                    kelasBaru = "VIII B",
+                    no = "02",
+                    ket = "Scan tepat waktu",
+                    menit = 0
+                )
+            )
+            attendanceHistory.add(
+                AttendanceRecord(
+                    id = "PRS003",
+                    timestamp = "${clock.tgl} 07:42:00",
+                    tglMasehi = clock.tgl,
+                    hari = clock.hari,
+                    tglHijriah = clock.hijri.text,
+                    jam = "07:42",
+                    nama = "Ust. Muhammad Ridwan, Lc",
+                    tempat = "Gedung Timur",
+                    status = "TERLAMBAT",
+                    terminal = "T02",
+                    pps = "14371027",
+                    kelasAsal = "VIII A",
+                    kelasBaru = "IX A",
+                    no = "03",
+                    ket = "Terlambat 12 menit",
+                    menit = 12
+                )
+            )
+            leaveList.add(
+                LeaveItem(clock.tgl, "14371028", "Ustazah Nur Aini, S.Si", "IZIN", "Keperluan dinas luar kota")
+            )
+            persistAttendance()
+        }
+    }
+
+    private fun persistTeachers() {
+        localStore?.saveTeachers(defaultTeachers)
+    }
+
+    private fun persistAttendance() {
+        localStore?.saveAttendanceHistory(attendanceHistory)
     }
 
     fun getEndpointUrl(): String = endpointUrl
-    fun setEndpointUrl(newUrl: String) { endpointUrl = newUrl }
+
+    fun setEndpointUrl(newUrl: String) {
+        endpointUrl = newUrl.trim()
+        localStore?.saveEndpointUrl(endpointUrl)
+    }
 
     /**
-     * Exact calculation of Jam Istiwak (Solar Time) from Code.gs:
-     * wib = UTC+7
-     * n = day of year
-     * B = 2*PI/365 * (n - 81)
-     * eot = 9.87*sin(2B) - 7.53*cos(B) - 1.5*sin(B)
-     * off = 4*(Bujur - 105) + eot + koreksi
+     * Exact calculation of Jam Istiwak (Solar Time) from Code.gs
      */
     fun calculateIstiwakClock(): ClockInfo {
         val now = System.currentTimeMillis()
@@ -102,7 +185,6 @@ class PresensiApiService(
         val koreksi = (settings["KOREKSI ISTIWAK MENIT"] ?: "0").toDoubleOrNull() ?: 0.0
         val offMinutes = 4.0 * (bujur - 105.0) + eot + koreksi
 
-        // Istiwak time
         val istiwakTimeMillis = now + (offMinutes * 60000.0).toLong()
         val istCal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("GMT+7"))
         istCal.timeInMillis = istiwakTimeMillis
@@ -131,19 +213,14 @@ class PresensiApiService(
     }
 
     private fun convertGregorianToHijri(gDate: String): HijriInfo {
-        // Approximate / LF PBNU based Hijri logic for year 1448 H
         val parts = gDate.split("-")
-        val gYear = parts.getOrNull(0)?.toIntOrNull() ?: 2026
-        val gMonth = parts.getOrNull(1)?.toIntOrNull() ?: 10
         val gDay = parts.getOrNull(2)?.toIntOrNull() ?: 7
 
-        // Rough calculation aligned with 1448 H (Safar / Rabiul Awal / Rabiul Akhir 1448 H)
         val hm = listOf(
             "Muharram", "Safar", "Rabiul Awal", "Rabiul Akhir",
             "Jumadil Awal", "Jumadil Akhir", "Rajab", "Syaban",
             "Ramadhan", "Syawal", "Zulkaidah", "Zulhijjah"
         )
-        // October 2026 aligns around Rabiul Akhir / Jumadil Awal 1448 H
         val hMonthIndex = 3 // Rabiul Akhir
         val hDay = ((gDay + 18) % 30) + 1
         val hYear = 1448
@@ -161,7 +238,7 @@ class PresensiApiService(
     }
 
     suspend fun getBoot(terminal: String = "T01"): BootConfig = withContext(Dispatchers.IO) {
-        // Try calling remote API via GET or fallback to local
+        // Attempt remote fetch
         try {
             val url = "$endpointUrl?action=getBoot&terminal=$terminal"
             val request = Request.Builder().url(url).build()
@@ -175,17 +252,16 @@ class PresensiApiService(
                         alamat = json.optString("alamat", settings["ALAMAT"] ?: ""),
                         refresh = json.optInt("refresh", 8),
                         clock = calculateIstiwakClock(),
-                        terminal = json.optString("terminal", "Terminal 1"),
+                        terminal = json.optString("terminal", "Terminal $terminal"),
                         logo = json.optString("logo", "")
                     )
                 }
             }
         } catch (_: Exception) {}
 
-        // Standalone calculation
         BootConfig(
-            nama = settings["NAMA SEKOLAH"] ?: "MADRASAH & PESANTREN",
-            alamat = settings["ALAMAT"] ?: "Jl. Pesantren Luhur No. 01, Jawa Timur",
+            nama = settings["NAMA SEKOLAH"] ?: "Presensi Guru MMU Idadiyah",
+            alamat = settings["ALAMAT"] ?: "Madrasah Miftahul Ulum (MMU) Idadiyah",
             refresh = 8,
             clock = calculateIstiwakClock(),
             terminal = "Terminal $terminal",
@@ -193,13 +269,56 @@ class PresensiApiService(
         )
     }
 
+    /**
+     * Membaca dan Menyinkronkan semua data guru dari remote Google Sheet (sheet DATA_GURU)
+     */
+    suspend fun fetchTeachersFromRemote(): List<Teacher> = withContext(Dispatchers.IO) {
+        try {
+            val url = "$endpointUrl?action=getTeachers"
+            val request = Request.Builder().url(url).build()
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string() ?: ""
+                if (body.startsWith("[")) {
+                    val arr = JSONArray(body)
+                    val remoteTeachers = mutableListOf<Teacher>()
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        remoteTeachers.add(
+                            Teacher(
+                                pps = obj.optString("pps", ""),
+                                nama = obj.optString("nama", ""),
+                                kelasAsal = obj.optString("kelasAsal", ""),
+                                kelasBaru = obj.optString("kelasBaru", ""),
+                                tempat = obj.optString("tempat", ""),
+                                no = obj.optString("no", "")
+                            )
+                        )
+                    }
+                    if (remoteTeachers.isNotEmpty()) {
+                        defaultTeachers.clear()
+                        defaultTeachers.addAll(remoteTeachers)
+                        persistTeachers()
+                        return@withContext remoteTeachers
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        defaultTeachers
+    }
+
+    /**
+     * Memproses presensi guru:
+     * - Menyimpan ke database / sheet PRESENSI (lokal dan diteruskan ke remote Apps Script)
+     * - Terbaca langsung di seluruh aplikasi (Dashboard, Monitor, Rekap, Hari Ini)
+     */
     suspend fun processAttendance(pps: String, terminal: String): AttendanceProcessResult = withContext(Dispatchers.IO) {
         val cleanPps = pps.trim()
         val teacher = defaultTeachers.find { it.pps == cleanPps || it.nama.contains(cleanPps, ignoreCase = true) }
             ?: return@withContext AttendanceProcessResult(
                 type = "ERROR",
                 msg = "ID TIDAK DITEMUKAN",
-                sub = "ID PPS: $pps tidak terdaftar. Hubungi Tata Usaha."
+                sub = "ID PPS: $pps tidak terdaftar di DATA GURU. Hubungi Tata Usaha."
             )
 
         val clock = calculateIstiwakClock()
@@ -213,8 +332,8 @@ class PresensiApiService(
         val nowParts = jam.split(":")
         val nowMins = (nowParts.getOrNull(0)?.toIntOrNull() ?: 7) * 60 + (nowParts.getOrNull(1)?.toIntOrNull() ?: 0)
 
-        // Check duplicate
-        val existing = attendanceHistory.find { it.pps == teacher.pps }
+        // Cek duplikasi presensi hari ini
+        val existing = attendanceHistory.find { it.pps == teacher.pps && it.tglMasehi == clock.tgl }
         if (existing != null) {
             return@withContext AttendanceProcessResult(
                 type = "DUP",
@@ -227,7 +346,7 @@ class PresensiApiService(
                 jam = existing.jam,
                 status = existing.status,
                 menit = existing.menit,
-                sub = "Presensi sebelumnya tercatat pada ${existing.jam} Istiwak."
+                sub = "Presensi sebelumnya tercatat pada ${existing.jam} Istiwak di ${existing.terminal}."
             )
         }
 
@@ -237,19 +356,34 @@ class PresensiApiService(
         val type = if (isLate) "LATE" else "SUCCESS"
         val msg = if (isLate) "Presensi tercatat. Anda terlambat $menitTelat menit." else "Presensi berhasil tercatat!"
 
+        val newRecordId = "PRS-" + UUID.randomUUID().toString().substring(0, 8).uppercase()
+        val timestampStr = "${clock.tgl} ${clock.jam}:00"
+
         val record = AttendanceRecord(
+            id = newRecordId,
+            timestamp = timestampStr,
+            tglMasehi = clock.tgl,
+            hari = clock.hari,
+            tglHijriah = clock.hijri.text,
             jam = jam,
             nama = teacher.nama,
             tempat = teacher.tempat,
             status = status,
             terminal = terminal,
             pps = teacher.pps,
-            ket = if (isLate) "Terlambat $menitTelat menit" else "Tepat waktu",
+            kelasAsal = teacher.kelasAsal,
+            kelasBaru = teacher.kelasBaru,
+            no = teacher.no,
+            ket = if (isLate) "Terlambat $menitTelat menit" else "Scan tepat waktu",
             menit = menitTelat
         )
+
+        // Tambahkan ke riwayat presensi lokal & persisten
         attendanceHistory.add(0, record)
+        persistAttendance()
+
         logs.add(0, ActivityLog(
-            time = "${clock.tgl} ${clock.jam}:00",
+            time = timestampStr,
             user = terminal,
             role = "SCANNER",
             activity = "SCAN PRESENSI",
@@ -258,6 +392,9 @@ class PresensiApiService(
             after = status,
             note = msg
         ))
+
+        // Kirim asinkron ke remote Apps Script jika online
+        sendAttendanceToRemote(record)
 
         AttendanceProcessResult(
             type = type,
@@ -273,25 +410,45 @@ class PresensiApiService(
         )
     }
 
+    private fun sendAttendanceToRemote(record: AttendanceRecord) {
+        try {
+            val url = "$endpointUrl?action=processAttendance&pps=${URLEncoder.encode(record.pps, "UTF-8")}&terminal=${record.terminal}"
+            val request = Request.Builder().url(url).build()
+            client.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: java.io.IOException) {}
+                override fun onResponse(call: Call, response: Response) {
+                    response.close()
+                }
+            })
+        } catch (_: Exception) {}
+    }
+
     suspend fun getDashboardData(): DashboardData = withContext(Dispatchers.IO) {
         val clock = calculateIstiwakClock()
         val totalTeachers = defaultTeachers.size
-        val attendedPps = attendanceHistory.map { it.pps }.toSet()
-        val leavePps = leaveList.map { it.pps }.toSet()
+
+        // Attendance hari ini
+        val todayAttendances = attendanceHistory.filter { it.tglMasehi.isEmpty() || it.tglMasehi == clock.tgl }
+        val attendedPps = todayAttendances.map { it.pps }.toSet()
+        val leavePps = leaveList.filter { it.tgl == clock.tgl }.map { it.pps }.toSet()
 
         var hadir = 0
         var telat = 0
-        attendanceHistory.forEach {
-            if (it.status == "HADIR") hadir++
-            if (it.status == "TERLAMBAT") telat++
+        var alpa = 0
+        todayAttendances.forEach {
+            when (it.status) {
+                "HADIR" -> hadir++
+                "TERLAMBAT" -> telat++
+                "ALPA" -> alpa++
+            }
         }
-        val izin = leaveList.count { it.jenis == "IZIN" }
-        val sakit = leaveList.count { it.jenis == "SAKIT" }
-        val dinas = leaveList.count { it.jenis == "DINAS" }
+        val izin = leaveList.count { it.tgl == clock.tgl && it.jenis == "IZIN" }
+        val sakit = leaveList.count { it.tgl == clock.tgl && it.jenis == "SAKIT" }
+        val dinas = leaveList.count { it.tgl == clock.tgl && it.jenis == "DINAS" }
         val sudah = hadir + telat
+
         val belumTeachers = defaultTeachers.filter { !attendedPps.contains(it.pps) && !leavePps.contains(it.pps) }
         val belum = belumTeachers.size
-        val alpa = 0
 
         val summary = AttendanceSummary(
             total = totalTeachers,
@@ -305,8 +462,8 @@ class PresensiApiService(
             sudah = sudah
         )
 
-        // Places summary
-        val placeMap = mutableMapOf<String, Pair<Int, Int>>() // total, sudah
+        // Rekap per tempat
+        val placeMap = mutableMapOf<String, Pair<Int, Int>>()
         defaultTeachers.forEach { t ->
             val cur = placeMap[t.tempat] ?: Pair(0, 0)
             val isSudah = attendedPps.contains(t.pps)
@@ -316,7 +473,6 @@ class PresensiApiService(
             PlaceSummary(nama = nama, total = pair.first, sudah = pair.second)
         }
 
-        // Realistic Trend Data
         val dailyTrend = listOf(
             TrendPoint("30/09", 94.0, 1),
             TrendPoint("01/10", 97.5, 0),
@@ -343,7 +499,7 @@ class PresensiApiService(
             clock = clock,
             s = summary,
             belum = belumTeachers,
-            latest = attendanceHistory.take(15),
+            latest = todayAttendances.take(20),
             tempat = tempatList,
             trend = TrendData(dailyTrend, weeklyTrend, monthlyTrend)
         )
@@ -363,15 +519,16 @@ class PresensiApiService(
         var totAlpa = 0
 
         val rows = filteredTeachers.mapIndexed { index, t ->
-            val isAttended = attendanceHistory.find { it.pps == t.pps }
-            val leave = leaveList.find { it.pps == t.pps }
+            val matches = attendanceHistory.filter { it.pps == t.pps && (it.tglMasehi.isEmpty() || (it.tglMasehi >= from && it.tglMasehi <= to)) }
+            val leaveMatches = leaveList.filter { it.pps == t.pps && (it.tgl.isEmpty() || (it.tgl >= from && it.tgl <= to)) }
 
-            val hadir = if (isAttended?.status == "HADIR") 1 else 0
-            val telat = if (isAttended?.status == "TERLAMBAT") 1 else 0
-            val izin = if (leave?.jenis == "IZIN") 1 else 0
-            val sakit = if (leave?.jenis == "SAKIT") 1 else 0
-            val dinas = if (leave?.jenis == "DINAS") 1 else 0
-            val alpa = if (isAttended == null && leave == null) 0 else 0
+            val hadir = matches.count { it.status == "HADIR" }
+            val telat = matches.count { it.status == "TERLAMBAT" }
+            val alpa = matches.count { it.status == "ALPA" }
+            val izin = leaveMatches.count { it.jenis == "IZIN" }
+            val sakit = leaveMatches.count { it.jenis == "SAKIT" }
+            val dinas = leaveMatches.count { it.jenis == "DINAS" }
+
             val total = hadir + telat + izin + sakit + dinas + alpa
             val pct = if (total > 0) Math.round(((hadir + telat).toDouble() / total) * 1000.0) / 10.0 else 100.0
 
@@ -415,20 +572,55 @@ class PresensiApiService(
     }
 
     suspend fun addTeacher(teacher: Teacher): Boolean = withContext(Dispatchers.IO) {
-        defaultTeachers.add(teacher)
+        val existing = defaultTeachers.indexOfFirst { it.pps == teacher.pps }
+        if (existing >= 0) {
+            defaultTeachers[existing] = teacher
+        } else {
+            defaultTeachers.add(teacher)
+        }
+        persistTeachers()
         true
+    }
+
+    suspend fun addTeachersBatch(newTeachers: List<Teacher>): Int = withContext(Dispatchers.IO) {
+        var added = 0
+        newTeachers.forEach { t ->
+            val existing = defaultTeachers.indexOfFirst { it.pps == t.pps }
+            if (existing >= 0) {
+                defaultTeachers[existing] = t
+            } else {
+                defaultTeachers.add(t)
+                added++
+            }
+        }
+        persistTeachers()
+        added
+    }
+
+    suspend fun getAttendanceHistory(): List<AttendanceRecord> = withContext(Dispatchers.IO) {
+        attendanceHistory
     }
 
     suspend fun updateAttendance(pps: String, tgl: String, status: String, jam: String, ket: String, alasan: String): Boolean = withContext(Dispatchers.IO) {
         val teacher = defaultTeachers.find { it.pps == pps } ?: return@withContext false
-        val existingIndex = attendanceHistory.indexOfFirst { it.pps == pps }
+        val existingIndex = attendanceHistory.indexOfFirst { it.pps == pps && it.tglMasehi == tgl }
+        val clock = calculateIstiwakClock()
+
         val record = AttendanceRecord(
+            id = "PRS-KOR-" + UUID.randomUUID().toString().substring(0, 6).uppercase(),
+            timestamp = "$tgl $jam:00",
+            tglMasehi = tgl,
+            hari = clock.hari,
+            tglHijriah = clock.hijri.text,
             jam = jam,
             nama = teacher.nama,
             tempat = teacher.tempat,
             status = status,
             terminal = "ADMIN",
             pps = pps,
+            kelasAsal = teacher.kelasAsal,
+            kelasBaru = teacher.kelasBaru,
+            no = teacher.no,
             ket = "Koreksi: $alasan ($ket)",
             menit = 0
         )
@@ -437,6 +629,8 @@ class PresensiApiService(
         } else {
             attendanceHistory.add(0, record)
         }
+        persistAttendance()
+
         logs.add(0, ActivityLog(
             time = "$tgl $jam:00",
             user = "admin",
@@ -491,26 +685,37 @@ class PresensiApiService(
     }
 
     suspend fun closeDay(tgl: String): Int = withContext(Dispatchers.IO) {
-        val attendedPps = attendanceHistory.map { it.pps }.toSet()
-        val leavePps = leaveList.map { it.pps }.toSet()
+        val clock = calculateIstiwakClock()
+        val attendedPps = attendanceHistory.filter { it.tglMasehi == tgl }.map { it.pps }.toSet()
+        val leavePps = leaveList.filter { it.tgl == tgl }.map { it.pps }.toSet()
         var alpaCount = 0
+
         defaultTeachers.forEach { teacher ->
             if (!attendedPps.contains(teacher.pps) && !leavePps.contains(teacher.pps)) {
-                attendanceHistory.add(
-                    AttendanceRecord(
-                        jam = "-",
-                        nama = teacher.nama,
-                        tempat = teacher.tempat,
-                        status = "ALPA",
-                        terminal = "SISTEM",
-                        pps = teacher.pps,
-                        ket = "Tutup presensi otomatis",
-                        menit = 0
-                    )
+                val record = AttendanceRecord(
+                    id = "PRS-ALP-" + UUID.randomUUID().toString().substring(0, 6).uppercase(),
+                    timestamp = "$tgl 12:30:00",
+                    tglMasehi = tgl,
+                    hari = clock.hari,
+                    tglHijriah = clock.hijri.text,
+                    jam = "-",
+                    nama = teacher.nama,
+                    tempat = teacher.tempat,
+                    status = "ALPA",
+                    terminal = "SISTEM",
+                    pps = teacher.pps,
+                    kelasAsal = teacher.kelasAsal,
+                    kelasBaru = teacher.kelasBaru,
+                    no = teacher.no,
+                    ket = "Tutup presensi otomatis",
+                    menit = 0
                 )
+                attendanceHistory.add(record)
                 alpaCount++
             }
         }
+        persistAttendance()
+
         logs.add(0, ActivityLog(
             time = "$tgl 12:30:00",
             user = "admin",

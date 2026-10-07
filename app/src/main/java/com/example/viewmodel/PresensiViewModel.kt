@@ -1,6 +1,7 @@
 package com.example.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.model.*
 import com.example.service.PresensiApiService
@@ -20,8 +21,12 @@ enum class AppScreen {
     SETTINGS     // Pengaturan Jam, Toleransi, Bujur & Endpoint
 }
 
-class PresensiViewModel : ViewModel() {
-    val apiService = PresensiApiService()
+class PresensiViewModel(application: Application) : AndroidViewModel(application) {
+    val apiService = PresensiApiService(context = application.applicationContext)
+
+    // Current authenticated user session (null = not logged in / show Login screen)
+    private val _currentUser = MutableStateFlow<UserSession?>(null)
+    val currentUser: StateFlow<UserSession?> = _currentUser.asStateFlow()
 
     private val _currentScreen = MutableStateFlow(AppScreen.TERMINAL)
     val currentScreen: StateFlow<AppScreen> = _currentScreen.asStateFlow()
@@ -74,7 +79,45 @@ class PresensiViewModel : ViewModel() {
         }
     }
 
+    fun login(user: String, pass: String): Boolean {
+        val session = AuthCredentials.authenticate(user, pass)
+        if (session != null) {
+            _currentUser.value = session
+            if (session.role == UserRole.TERMINAL) {
+                val termId = session.terminalId ?: "T01"
+                _selectedTerminal.value = termId
+                _currentScreen.value = AppScreen.TERMINAL
+                loadBoot()
+            } else {
+                // Admin role: default to DASHBOARD or MONITOR
+                _currentScreen.value = AppScreen.DASHBOARD
+                loadDashboard()
+            }
+            showToast("Selamat datang, ${session.displayName}!")
+            return true
+        }
+        return false
+    }
+
+    fun logout() {
+        _currentUser.value = null
+        _scanResult.value = null
+        showToast("Anda telah keluar.")
+    }
+
     fun setScreen(screen: AppScreen) {
+        val user = _currentUser.value
+        // Security gate: If user is terminal, only TERMINAL is permitted
+        if (user?.role == UserRole.TERMINAL && screen != AppScreen.TERMINAL) {
+            showToast("Akun Terminal hanya memiliki akses ke Scanner.")
+            return
+        }
+        // If user is Admin, TERMINAL scan is hidden/excluded as requested
+        if (user?.role == UserRole.ADMIN && screen == AppScreen.TERMINAL) {
+            showToast("Akun Admin/Pimpinan mengelola pemantauan dan laporan.")
+            return
+        }
+
         _currentScreen.value = screen
         if (screen == AppScreen.DASHBOARD || screen == AppScreen.MONITOR) {
             loadDashboard()
@@ -117,6 +160,34 @@ class PresensiViewModel : ViewModel() {
     fun loadTeachers() {
         viewModelScope.launch {
             _teachers.value = apiService.getTeachers()
+        }
+    }
+
+    fun syncTeachersFromRemote() {
+        viewModelScope.launch {
+            showToast("Menyinkronkan data guru dari Google Sheet...")
+            val list = apiService.fetchTeachersFromRemote()
+            _teachers.value = list
+            loadDashboard()
+            showToast("Berhasil memuat ${list.size} guru dari DATA_GURU!")
+        }
+    }
+
+    fun addNewTeacher(teacher: Teacher) {
+        viewModelScope.launch {
+            apiService.addTeacher(teacher)
+            _teachers.value = apiService.getTeachers()
+            loadDashboard()
+            showToast("Guru ${teacher.nama} berhasil ditambahkan!")
+        }
+    }
+
+    fun importTeachersBatch(teachersList: List<Teacher>) {
+        viewModelScope.launch {
+            val count = apiService.addTeachersBatch(teachersList)
+            _teachers.value = apiService.getTeachers()
+            loadDashboard()
+            showToast("Berhasil mengimpor $count guru ke sistem!")
         }
     }
 

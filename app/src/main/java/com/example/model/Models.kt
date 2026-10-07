@@ -18,7 +18,7 @@ data class HijriInfo(
 )
 
 data class BootConfig(
-    val nama: String = "SISTEM PRESENSI DIGITAL GURU",
+    val nama: String = "Presensi Guru MMU Idadiyah",
     val alamat: String = "Alamat Sekolah",
     val refresh: Int = 8,
     val clock: ClockInfo = ClockInfo(),
@@ -39,12 +39,20 @@ data class AttendanceSummary(
 )
 
 data class AttendanceRecord(
+    val id: String = "",
+    val timestamp: String = "",
+    val tglMasehi: String = "",
+    val hari: String = "",
+    val tglHijriah: String = "",
     val jam: String = "",
     val nama: String = "",
     val tempat: String = "",
     val status: String = "",
     val terminal: String = "",
     val pps: String = "",
+    val kelasAsal: String = "",
+    val kelasBaru: String = "",
+    val no: String = "",
     val ket: String = "",
     val menit: Int = 0
 )
@@ -151,8 +159,14 @@ data class ActivityLog(
     val note: String = ""
 )
 
+enum class UserRole {
+    TERMINAL,    // T01 .. T05 (Scan only)
+    ADMIN        // TU1..TU3, WK1..WK6, Kepsek (Monitor, Dashboard, Rekap, Hari Ini, Izin, Setting)
+}
+
 data class UserSession(
-    val token: String,
-    val nama: String,
-    val role: String
+    val username: String,
+    val role: UserRole,
+    val displayName: String,
+    val terminalId: String? = null // e.g. T01
 )

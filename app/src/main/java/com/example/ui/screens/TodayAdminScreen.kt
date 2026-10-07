@@ -28,12 +28,21 @@ fun TodayAdminScreen(viewModel: PresensiViewModel) {
     val teachers by viewModel.teachers.collectAsState()
 
     var showCorrectionDialog by remember { mutableStateOf(false) }
+    var showAddTeacherDialog by remember { mutableStateOf(false) }
     var selectedTeacher by remember { mutableStateOf<Teacher?>(null) }
     var selectedStatus by remember { mutableStateOf("HADIR") }
     var inputJam by remember { mutableStateOf(clock.jam) }
     var inputAlasan by remember { mutableStateOf("") }
     var inputKet by remember { mutableStateOf("") }
     var filterQuery by remember { mutableStateOf("") }
+
+    // New Teacher Fields
+    var newPps by remember { mutableStateOf("") }
+    var newNama by remember { mutableStateOf("") }
+    var newKelasAsal by remember { mutableStateOf("") }
+    var newKelasBaru by remember { mutableStateOf("") }
+    var newTempat by remember { mutableStateOf("") }
+    var newNo by remember { mutableStateOf("") }
 
     val attendedMap = remember(data.latest) {
         data.latest.associateBy { it.pps }
@@ -83,21 +92,50 @@ fun TodayAdminScreen(viewModel: PresensiViewModel) {
                             )
                         }
 
-                        Button(
-                            onClick = {
-                                selectedTeacher = null
-                                selectedStatus = "HADIR"
-                                inputJam = clock.jam
-                                inputAlasan = "Input manual pengurus"
-                                inputKet = ""
-                                showCorrectionDialog = true
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = GreenPrimary),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Manual", fontSize = 13.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            // Sync Sheet Button
+                            FilledTonalIconButton(
+                                onClick = { viewModel.syncTeachersFromRemote() }
+                            ) {
+                                Icon(Icons.Default.Sync, contentDescription = "Sinkron Sheet", tint = GreenDark)
+                            }
+
+                            // Tambah Guru ke DATA GURU
+                            Button(
+                                onClick = {
+                                    newPps = ""
+                                    newNama = ""
+                                    newKelasAsal = ""
+                                    newKelasBaru = ""
+                                    newTempat = ""
+                                    newNo = ""
+                                    showAddTeacherDialog = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = BlueInfo),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Guru", fontSize = 12.sp)
+                            }
+
+                            // Presensi Manual
+                            Button(
+                                onClick = {
+                                    selectedTeacher = null
+                                    selectedStatus = "HADIR"
+                                    inputJam = clock.jam
+                                    inputAlasan = "Input manual pengurus"
+                                    inputKet = ""
+                                    showCorrectionDialog = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenPrimary),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Presensi", fontSize = 12.sp)
+                            }
                         }
                     }
 
@@ -106,7 +144,7 @@ fun TodayAdminScreen(viewModel: PresensiViewModel) {
                     OutlinedTextField(
                         value = filterQuery,
                         onValueChange = { filterQuery = it },
-                        label = { Text("Cari Guru / ID PPS / Gedung") },
+                        label = { Text("Cari Guru / ID PPS / Gedung (${teachers.size} Terdaftar)") },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -139,7 +177,7 @@ fun TodayAdminScreen(viewModel: PresensiViewModel) {
                             color = RedDanger
                         )
                         Text(
-                            text = "Guru yang belum presensi akan otomatis berstatus ALPA",
+                            text = "Guru yang belum presensi akan otomatis berstatus ALPA di sheet",
                             fontSize = 12.sp,
                             color = SlateDark
                         )
@@ -156,7 +194,7 @@ fun TodayAdminScreen(viewModel: PresensiViewModel) {
             }
         }
 
-        // Teacher List
+        // Teacher List & Statuses
         items(filteredTeachers) { teacher ->
             val attendance = attendedMap[teacher.pps]
             val status = attendance?.status ?: "BELUM"
@@ -183,7 +221,7 @@ fun TodayAdminScreen(viewModel: PresensiViewModel) {
                             color = SlateDark
                         )
                         Text(
-                            text = "ID: ${teacher.pps} • ${teacher.tempat} • Jam: $jam",
+                            text = "ID PPS: ${teacher.pps} • ${teacher.tempat} • Jam: $jam",
                             fontSize = 12.sp,
                             color = SlateMuted
                         )
@@ -217,13 +255,99 @@ fun TodayAdminScreen(viewModel: PresensiViewModel) {
         }
     }
 
-    // Koreksi / Input Dialog
+    // Tambah Guru Baru ke DATA_GURU Dialog
+    if (showAddTeacherDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddTeacherDialog = false },
+            title = {
+                Text("Tambah Guru ke Sheet DATA_GURU", fontWeight = FontWeight.Bold, color = GreenDark)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = newPps,
+                        onValueChange = { newPps = it },
+                        label = { Text("ID PPS / NIP (Wajib)") },
+                        placeholder = { Text("mis. 14371037") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newNama,
+                        onValueChange = { newNama = it },
+                        label = { Text("Nama Lengkap & Gelar (Wajib)") },
+                        placeholder = { Text("mis. Ustadz Abdullah, S.Pd") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = newKelasAsal,
+                            onValueChange = { newKelasAsal = it },
+                            label = { Text("Kelas Asal") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = newKelasBaru,
+                            onValueChange = { newKelasBaru = it },
+                            label = { Text("Kelas Baru") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = newTempat,
+                            onValueChange = { newTempat = it },
+                            label = { Text("Tempat / Gedung") },
+                            placeholder = { Text("Gedung Pusat") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = newNo,
+                            onValueChange = { newNo = it },
+                            label = { Text("No Urut") },
+                            modifier = Modifier.weight(0.7f)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newPps.isNotBlank() && newNama.isNotBlank()) {
+                            viewModel.addNewTeacher(
+                                Teacher(
+                                    pps = newPps.trim(),
+                                    nama = newNama.trim(),
+                                    kelasAsal = newKelasAsal.trim(),
+                                    kelasBaru = newKelasBaru.trim(),
+                                    tempat = newTempat.trim().ifEmpty { "Gedung Pusat" },
+                                    no = newNo.trim()
+                                )
+                            )
+                            showAddTeacherDialog = false
+                        } else {
+                            viewModel.showToast("ID PPS dan Nama wajib diisi!")
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GreenPrimary)
+                ) {
+                    Text("Simpan Guru")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddTeacherDialog = false }) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+
+    // Koreksi / Input Presensi Dialog
     if (showCorrectionDialog) {
         AlertDialog(
             onDismissRequest = { showCorrectionDialog = false },
             title = {
                 Text(
-                    text = if (selectedTeacher != null) "Koreksi Presensi" else "Presensi Manual",
+                    text = if (selectedTeacher != null) "Koreksi / Simpan ke Sheet PRESENSI" else "Presensi Manual Guru",
                     fontWeight = FontWeight.Bold
                 )
             },
@@ -305,7 +429,7 @@ fun TodayAdminScreen(viewModel: PresensiViewModel) {
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = GreenPrimary)
                 ) {
-                    Text("Simpan")
+                    Text("Simpan ke Sheet")
                 }
             },
             dismissButton = {
